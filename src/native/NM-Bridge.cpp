@@ -2,8 +2,6 @@
 
 #include "NM-Bridge.h"
 
-#ifdef _WIN32
-
 #include <thread>
 #include <chrono>
 #include <algorithm>
@@ -41,8 +39,7 @@ namespace
 
     std::string base64_encode(const std::vector<BYTE>& data)
     {
-        static const char* table =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
         std::string out;
         size_t i = 0;
@@ -123,24 +120,24 @@ bool NM_Bridge::Init(const std::wstring& ManagedDllPath, std::wstring& error)
         return false;
     }
 
-    hr = ClrRuntimeHost->Start();	
+    hr = ClrRuntimeHost->Start();
     if (FAILED(hr))
     {
         error = L"CLR Start failed";
         return false;
     }
-	
+
     DWORD pid = GetCurrentProcessId();
     pipename = "managedbridge_server_" + std::to_string(pid) + "_" + std::to_string(rand() % 10000);
-	authToken = std::to_string(GetTickCount64()) + "_" + std::to_string(rand());
+    authToken = std::to_string(GetTickCount64()) + "_" + std::to_string(rand());
 
-	json initReq = {
-		{"cmd", "_start_server"},
-		{"pipeName", pipename},
-		{"authToken", authToken}
-	};
+    json initReq = {
+        {"cmd", "_start_server"},
+        {"pipeName", pipename},
+        {"authToken", authToken}
+    };
 
-	std::string dummy;
+    std::string dummy;
     return StartManagedServer(ManagedDllPath, initReq.dump(), dummy, error, 15000);
 }
 
@@ -199,17 +196,14 @@ bool NM_Bridge::StartManagedServer(const std::wstring& ManagedDllPath, const std
 
     for (int i = 0; i < tries; ++i)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
         std::string pipePath = "\\\\.\\pipe\\" + pipename;
-        HANDLE h = CreateFileA(pipePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 
-        if (h != INVALID_HANDLE_VALUE)
+        if (WaitNamedPipeA(pipePath.c_str(), 100) || GetLastError() == ERROR_PIPE_BUSY)
         {
-            CloseHandle(h);
             ok = true;
             break;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
     if (!ok)
@@ -252,19 +246,42 @@ bool NM_Bridge::LoadFromFile(const std::string& domainId, const std::wstring& as
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
 
-bool NM_Bridge::LoadFromBytes(const std::string& domainId, const std::string& bytesBase64, const std::string& simpleName, std::string& response, std::wstring& error, int timeoutMs)
+bool NM_Bridge::LoadFromMemory(const std::string& domainId, const std::vector<BYTE>& bytes, const std::string& simpleName, std::string& response, std::wstring& error, int timeoutMs)
 {
     json rq;
-    rq["cmd"] = "loadFromBytes";
+    rq["cmd"] = "loadFromMemory";
     rq["domainId"] = domainId;
-    rq["bytesBase64"] = bytesBase64;
+    rq["bytesBase64"] = base64_encode(bytes);
     if (!simpleName.empty()) rq["assemblySimpleName"] = simpleName;
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
 
 // ---------------- Invoke ----------------
 
-bool NM_Bridge::InvokeStatic( const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs)
+
+bool NM_Bridge::CreateInstance(const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& constructorArgsJson, std::string& resultJson, std::wstring& err, int timeoutMs)
+{
+    json rq;
+    rq["cmd"] = "createInstance";
+    rq["domainId"] = domainId;
+    rq["assemblyName"] = assemblyAlias;
+    rq["typeName"] = typeName;
+    rq["ctorArgsJson"] = constructorArgsJson;
+
+    return SendCommand(rq.dump(), resultJson, err, timeoutMs);
+}
+
+bool NM_Bridge::ReleaseInstance(const std::string& domainId, const std::string& instanceId, std::string& resultJson, std::wstring& err, int timeoutMs)
+{
+    json rq;
+    rq["cmd"] = "releaseInstance";
+    rq["domainId"] = domainId;
+    rq["instanceId"] = instanceId;
+    return SendCommand(rq.dump(), resultJson, err, timeoutMs);
+}
+
+
+bool NM_Bridge::InvokeStatic(const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs)
 {
     json rq;
     rq["cmd"] = "invoke";
@@ -294,6 +311,7 @@ bool NM_Bridge::InvokeInstance(const std::string& domainId, const std::string& a
 
 
 // ---------------- SendCommand ----------------
+
 bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output, std::wstring& error, int timeoutMs)
 {
     if (pipename.empty())
@@ -320,6 +338,7 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
 
     HANDLE hPipe = INVALID_HANDLE_VALUE;
 
+    DWORD start = GetTickCount64();
     while (true)
     {
         hPipe = CreateFileA(pipePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -335,7 +354,20 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
             return false;
         }
 
-        if (!WaitNamedPipeA(pipePath.c_str(), timeoutMs))
+        if (errc == ERROR_FILE_NOT_FOUND)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        else
+        {
+            if (!WaitNamedPipeA(pipePath.c_str(), timeoutMs))
+            {
+                error = L"Timeout connecting to pipe";
+                return false;
+            }
+        }
+
+        if ((GetTickCount64() - start) > (DWORD)timeoutMs)
         {
             error = L"Timeout connecting to pipe";
             return false;
@@ -367,7 +399,7 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
         if (bytesRead > 0)
             buffer.append(temp, bytesRead);
 
-        if (r) 
+        if (r)
             break;
 
         if (!r && err != ERROR_MORE_DATA)
@@ -402,4 +434,60 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
     }
 
     return true;
+}
+
+void UnlinkModuleFromPEB(HMODULE hModule)
+{
+    if (!hModule) return;
+
+#ifdef _M_X64
+    PPEB pPEB = (PPEB)__readgsqword(0x60);
+#else
+    PPEB pPEB = (PPEB)__readfsdword(0x30);
+#endif
+
+    PPEB_LDR_DATA_FULL pLdr = (PPEB_LDR_DATA_FULL)pPEB->Ldr;
+    PLIST_ENTRY Head = &pLdr->InLoadOrderModuleList;
+    PLIST_ENTRY CurrentEntry = Head->Flink;
+
+    while (CurrentEntry != Head && CurrentEntry != NULL)
+    {
+        PLDR_DATA_TABLE_ENTRY_FULL CurrentData = CONTAINING_RECORD(CurrentEntry, LDR_DATA_TABLE_ENTRY_FULL, InLoadOrderLinks);
+
+        if (CurrentData->DllBase == hModule)
+        {
+            CurrentData->InLoadOrderLinks.Blink->Flink = CurrentData->InLoadOrderLinks.Flink;
+            CurrentData->InLoadOrderLinks.Flink->Blink = CurrentData->InLoadOrderLinks.Blink;
+
+            CurrentData->InMemoryOrderLinks.Blink->Flink = CurrentData->InMemoryOrderLinks.Flink;
+            CurrentData->InMemoryOrderLinks.Flink->Blink = CurrentData->InMemoryOrderLinks.Blink;
+
+            if (CurrentData->InInitializationOrderLinks.Flink && CurrentData->InInitializationOrderLinks.Blink) {
+                CurrentData->InInitializationOrderLinks.Blink->Flink = CurrentData->InInitializationOrderLinks.Flink;
+                CurrentData->InInitializationOrderLinks.Flink->Blink = CurrentData->InInitializationOrderLinks.Blink;
+            }
+
+            if (CurrentData->FullDllName.Buffer)
+                SecureZeroMemory(CurrentData->FullDllName.Buffer, CurrentData->FullDllName.MaximumLength);
+
+            if (CurrentData->BaseDllName.Buffer)
+                SecureZeroMemory(CurrentData->BaseDllName.Buffer, CurrentData->BaseDllName.MaximumLength);
+
+            return;
+        }
+        CurrentEntry = CurrentEntry->Flink;
+    }
+}
+
+void HideCLR()
+{
+    const char* clr_modules[] = {
+        "clr.dll", "mscoree.dll", "clrjit.dll",
+        "coreclr.dll", "hostfxr.dll"
+    };
+
+    for (const char* mod : clr_modules) {
+        HMODULE hMod = GetModuleHandleA(mod);
+        if (hMod) UnlinkModuleFromPEB(hMod);
+    }
 }

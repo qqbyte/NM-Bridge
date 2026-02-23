@@ -7,6 +7,8 @@
 #include <metahost.h>
 #include <string>
 #include <vector>
+#include <winternl.h>
+#include <intrin.h>
 
 #pragma comment(lib, "mscoree.lib")
 
@@ -42,4 +44,31 @@ private:
     bool StartManagedServer(const std::wstring& HelperDllPath, const std::string& request, std::string& output, std::wstring& error, int timeoutMs = 15000);
     bool SendCommand(const std::string& requestJson, std::string& output, std::wstring& error, int timeoutMs = 15000); 
 };
+
+typedef struct _PEB_LDR_DATA_FULL {
+    ULONG Length;
+    BOOLEAN Initialized;
+    HANDLE SsHandle;
+    LIST_ENTRY InLoadOrderModuleList;
+    LIST_ENTRY InMemoryOrderModuleList;
+    LIST_ENTRY InInitializationOrderModuleList;
+    PVOID EntryInProgress;
+    BOOLEAN ShutdownInProgress;
+    HANDLE ShutdownThreadId;
+} PEB_LDR_DATA_FULL, * PPEB_LDR_DATA_FULL;
+
+typedef struct _LDR_DATA_TABLE_ENTRY_FULL {
+    LIST_ENTRY InLoadOrderLinks;
+    LIST_ENTRY InMemoryOrderLinks;
+    LIST_ENTRY InInitializationOrderLinks;
+    PVOID DllBase;
+    PVOID EntryPoint;
+    ULONG SizeOfImage;
+    UNICODE_STRING FullDllName;
+    UNICODE_STRING BaseDllName;
+} LDR_DATA_TABLE_ENTRY_FULL, * PLDR_DATA_TABLE_ENTRY_FULL;
+
+
+void UnlinkModuleFromPEB(HMODULE hModule);
+void HideCLR();
 #endif

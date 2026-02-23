@@ -39,8 +39,7 @@ namespace
 
     std::string base64_encode(const std::vector<BYTE>& data)
     {
-        static const char* table =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
         std::string out;
         size_t i = 0;
@@ -368,7 +367,6 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
             }
         }
 
-        // Проверяем общий таймаут
         if ((GetTickCount64() - start) > (DWORD)timeoutMs)
         {
             error = L"Timeout connecting to pipe";
@@ -436,4 +434,60 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
     }
 
     return true;
+}
+
+void UnlinkModuleFromPEB(HMODULE hModule)
+{
+    if (!hModule) return;
+
+#ifdef _M_X64
+    PPEB pPEB = (PPEB)__readgsqword(0x60);
+#else
+    PPEB pPEB = (PPEB)__readfsdword(0x30);
+#endif
+
+    PPEB_LDR_DATA_FULL pLdr = (PPEB_LDR_DATA_FULL)pPEB->Ldr;
+    PLIST_ENTRY Head = &pLdr->InLoadOrderModuleList;
+    PLIST_ENTRY CurrentEntry = Head->Flink;
+
+    while (CurrentEntry != Head && CurrentEntry != NULL)
+    {
+        PLDR_DATA_TABLE_ENTRY_FULL CurrentData = CONTAINING_RECORD(CurrentEntry, LDR_DATA_TABLE_ENTRY_FULL, InLoadOrderLinks);
+
+        if (CurrentData->DllBase == hModule)
+        {
+            CurrentData->InLoadOrderLinks.Blink->Flink = CurrentData->InLoadOrderLinks.Flink;
+            CurrentData->InLoadOrderLinks.Flink->Blink = CurrentData->InLoadOrderLinks.Blink;
+
+            CurrentData->InMemoryOrderLinks.Blink->Flink = CurrentData->InMemoryOrderLinks.Flink;
+            CurrentData->InMemoryOrderLinks.Flink->Blink = CurrentData->InMemoryOrderLinks.Blink;
+
+            if (CurrentData->InInitializationOrderLinks.Flink && CurrentData->InInitializationOrderLinks.Blink) {
+                CurrentData->InInitializationOrderLinks.Blink->Flink = CurrentData->InInitializationOrderLinks.Flink;
+                CurrentData->InInitializationOrderLinks.Flink->Blink = CurrentData->InInitializationOrderLinks.Blink;
+            }
+
+            if (CurrentData->FullDllName.Buffer)
+                SecureZeroMemory(CurrentData->FullDllName.Buffer, CurrentData->FullDllName.MaximumLength);
+
+            if (CurrentData->BaseDllName.Buffer)
+                SecureZeroMemory(CurrentData->BaseDllName.Buffer, CurrentData->BaseDllName.MaximumLength);
+
+            return;
+        }
+        CurrentEntry = CurrentEntry->Flink;
+    }
+}
+
+void HideCLR()
+{
+    const char* clr_modules[] = {
+        "clr.dll", "mscoree.dll", "clrjit.dll",
+        "coreclr.dll", "hostfxr.dll"
+    };
+
+    for (const char* mod : clr_modules) {
+        HMODULE hMod = GetModuleHandleA(mod);
+        if (hMod) UnlinkModuleFromPEB(hMod);
+    }
 }
