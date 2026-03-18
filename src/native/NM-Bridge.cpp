@@ -37,40 +37,18 @@ namespace
         return ws;
     }
 
+
     std::string base64_encode(const std::vector<BYTE>& data)
     {
-        static const char* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-        std::string out;
-        size_t i = 0;
-        size_t len = data.size();
-
-        while (i < len)
-        {
-            int a = data[i++];
-            int b = (i < len) ? data[i++] : 0;
-            int c = (i < len) ? data[i++] : 0;
-
-            int triple = (a << 16) + (b << 8) + c;
-
-            out.push_back(table[(triple >> 18) & 0x3F]);
-            out.push_back(table[(triple >> 12) & 0x3F]);
-            out.push_back((i - 1 <= len) ? table[(triple >> 6) & 0x3F] : '=');
-            out.push_back((i <= len) ? table[triple & 0x3F] : '=');
+        if (data.empty()) return "";
+        DWORD outLen = 0;
+        CryptBinaryToStringA((const BYTE*)data.data(), (DWORD)data.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &outLen);
+        std::string out(outLen + 1, '\0');
+        if (CryptBinaryToStringA((const BYTE*)data.data(), (DWORD)data.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, &out[0], &outLen)) {
+            out.resize(outLen);
+            return out;
         }
-
-        int mod = static_cast<int>(len % 3);
-        if (mod == 1)
-        {
-            out[out.size() - 1] = '=';
-            out[out.size() - 2] = '=';
-        }
-        else if (mod == 2)
-        {
-            out[out.size() - 1] = '=';
-        }
-
-        return out;
+        return "";
     }
 }
 
@@ -88,8 +66,7 @@ NM_Bridge::~NM_Bridge()
 
 bool NM_Bridge::Init(const std::wstring& ManagedDllPath, std::wstring& error)
 {
-    if (ClrRuntimeHost)
-        return true;
+    if (ClrRuntimeHost) return true;
 
     HRESULT hr = CLRCreateInstance(CLSID_CLRMetaHost, IID_PPV_ARGS(&MetaHost));
     if (FAILED(hr))
@@ -187,7 +164,7 @@ bool NM_Bridge::StartManagedServer(const std::wstring& ManagedDllPath, const std
 
     if (FAILED(hr))
     {
-        error = L"ExecuteInDefaultAppDomain(StartServer) failed";
+        error = L"StartServer failed";
         return false;
     }
 
@@ -223,6 +200,7 @@ bool NM_Bridge::CreateDomain(const std::string& domainId, std::string& response,
     json rq;
     rq["cmd"] = "createDomain";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
 
@@ -231,6 +209,7 @@ bool NM_Bridge::UnloadDomain(const std::string& domainId, std::string& response,
     json rq;
     rq["cmd"] = "unloadDomain";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
 
@@ -241,6 +220,7 @@ bool NM_Bridge::LoadFromFile(const std::string& domainId, const std::wstring& as
     json rq;
     rq["cmd"] = "loadFromFile";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["path"] = utf16_to_utf8(assemblyPath);
     if (!assemblyAlias.empty()) rq["assemblyAlias"] = assemblyAlias;
     return SendCommand(rq.dump(), response, error, timeoutMs);
@@ -251,6 +231,7 @@ bool NM_Bridge::LoadFromMemory(const std::string& domainId, const std::vector<BY
     json rq;
     rq["cmd"] = "loadFromMemory";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["bytesBase64"] = base64_encode(bytes);
     if (!simpleName.empty()) rq["assemblySimpleName"] = simpleName;
     return SendCommand(rq.dump(), response, error, timeoutMs);
@@ -258,16 +239,15 @@ bool NM_Bridge::LoadFromMemory(const std::string& domainId, const std::vector<BY
 
 // ---------------- Invoke ----------------
 
-
 bool NM_Bridge::CreateInstance(const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& constructorArgsJson, std::string& resultJson, std::wstring& err, int timeoutMs)
 {
     json rq;
     rq["cmd"] = "createInstance";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["assemblyName"] = assemblyAlias;
     rq["typeName"] = typeName;
-    rq["ctorArgsJson"] = constructorArgsJson;
-
+    rq["ctorArgsJson"] = FormatArgs(constructorArgsJson);
     return SendCommand(rq.dump(), resultJson, err, timeoutMs);
 }
 
@@ -276,6 +256,7 @@ bool NM_Bridge::ReleaseInstance(const std::string& domainId, const std::string& 
     json rq;
     rq["cmd"] = "releaseInstance";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["instanceId"] = instanceId;
     return SendCommand(rq.dump(), resultJson, err, timeoutMs);
 }
@@ -284,28 +265,50 @@ bool NM_Bridge::ReleaseInstance(const std::string& domainId, const std::string& 
 bool NM_Bridge::InvokeStatic(const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs)
 {
     json rq;
-    rq["cmd"] = "invoke";
+    rq["cmd"] = "invokeStatic";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["assemblyName"] = assemblyAlias;
     rq["typeName"] = typeName;
     rq["methodName"] = methodName;
-    rq["isStatic"] = true;
-    rq["instanceId"] = nullptr;
-    rq["argsJson"] = argsJson;
+    rq["argsJson"] = FormatArgs(argsJson);
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
+
 
 bool NM_Bridge::InvokeInstance(const std::string& domainId, const std::string& assemblyAlias, const std::string& instanceId, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs)
 {
     json rq;
-    rq["cmd"] = "invoke";
+    rq["cmd"] = "invokeInstance";
     rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
     rq["assemblyName"] = assemblyAlias;
+    rq["instanceId"] = instanceId;
+    rq["methodName"] = methodName;
+    rq["argsJson"] = FormatArgs(argsJson);
+    return SendCommand(rq.dump(), response, error, timeoutMs);
+}
+
+// ---------------- WPF ----------------
+
+bool NM_Bridge::RunWpfApp(const std::string& domainId, const std::string& assemblyName, const std::string& typeName, const std::string& methodName, const std::vector<std::string>& argsJson, std::string& response, std::wstring& error, int timeoutMs) {
+    json rq;
+    rq["cmd"] = "runWpfApp";
+    rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
+    rq["assemblyName"] = assemblyName;
     rq["typeName"] = typeName;
     rq["methodName"] = methodName;
-    rq["isStatic"] = false;
-    rq["instanceId"] = instanceId;
-    rq["argsJson"] = argsJson;
+    if (!argsJson.empty()) rq["argsJson"] = argsJson;
+    return SendCommand(rq.dump(), response, error, timeoutMs);
+}
+
+bool NM_Bridge::StopWpfApp(const std::string& domainId, const std::string& assemblyAlias, std::string& response, std::wstring& error, int timeoutMs) {
+    json rq;
+    rq["cmd"] = "stopWpfApp";
+    rq["domainId"] = domainId;
+    rq["authToken"] = authToken;
+    rq["assemblyAlias"] = assemblyAlias;
     return SendCommand(rq.dump(), response, error, timeoutMs);
 }
 
@@ -320,57 +323,29 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
         return false;
     }
 
-    json j;
-    try
-    {
-        j = json::parse(requestJson);
-    }
-    catch (...)
-    {
-        error = L"Invalid JSON request";
-        return false;
-    }
-
-    j["authToken"] = authToken;
-    std::string finalRequest = j.dump();
-
     std::string pipePath = "\\\\.\\pipe\\" + pipename;
-
     HANDLE hPipe = INVALID_HANDLE_VALUE;
-
     DWORD start = GetTickCount64();
+
     while (true)
     {
         hPipe = CreateFileA(pipePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-
-        if (hPipe != INVALID_HANDLE_VALUE)
-            break;
+        if (hPipe != INVALID_HANDLE_VALUE) break;
 
         DWORD errc = GetLastError();
-
         if (errc != ERROR_PIPE_BUSY && errc != ERROR_FILE_NOT_FOUND)
         {
             error = L"CreateFile pipe failed";
             return false;
         }
 
-        if (errc == ERROR_FILE_NOT_FOUND)
+        if (!WaitNamedPipeA(pipePath.c_str(), 100))
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        else
-        {
-            if (!WaitNamedPipeA(pipePath.c_str(), timeoutMs))
+            if ((GetTickCount64() - start) > (DWORD)timeoutMs)
             {
                 error = L"Timeout connecting to pipe";
                 return false;
             }
-        }
-
-        if ((GetTickCount64() - start) > (DWORD)timeoutMs)
-        {
-            error = L"Timeout connecting to pipe";
-            return false;
         }
     }
 
@@ -378,9 +353,7 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
     SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr);
 
     DWORD written = 0;
-    BOOL ok = WriteFile(hPipe, finalRequest.c_str(), (DWORD)finalRequest.size(), &written, nullptr);
-
-    if (!ok)
+    if (!WriteFile(hPipe, requestJson.c_str(), (DWORD)requestJson.size(), &written, nullptr))
     {
         CloseHandle(hPipe);
         error = L"WriteFile failed";
@@ -395,15 +368,9 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
     {
         BOOL r = ReadFile(hPipe, temp, sizeof(temp), &bytesRead, nullptr);
         DWORD err = GetLastError();
-
-        if (bytesRead > 0)
-            buffer.append(temp, bytesRead);
-
-        if (r)
-            break;
-
-        if (!r && err != ERROR_MORE_DATA)
-            break;
+        if (bytesRead > 0) buffer.append(temp, bytesRead);
+        if (r) break;
+        if (!r && err != ERROR_MORE_DATA) break;
     }
 
     CloseHandle(hPipe);
@@ -416,10 +383,15 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
 
     output = buffer;
 
-    try
+    auto resp = json::parse(output, nullptr, false);
+    if (resp.is_discarded())
     {
-        auto resp = json::parse(output);
+        error = L"Invalid JSON response";
+        return false;
+    }
 
+    if (resp.is_object())
+    {
         if (!resp.value("success", false))
         {
             std::string errMsg = resp.value("error", "Unknown error");
@@ -427,16 +399,26 @@ bool NM_Bridge::SendCommand(const std::string& requestJson, std::string& output,
             return false;
         }
     }
-    catch (...)
-    {
-        error = L"Invalid JSON response";
-        return false;
-    }
-
     return true;
 }
 
-void UnlinkModuleFromPEB(HMODULE hModule)
+
+std::string NM_Bridge::FormatArgs(const std::string& argsJson)
+{
+    std::string finalArgs = argsJson;
+    if (finalArgs.empty() || finalArgs == "null") {
+        return "[]";
+    }
+    if (finalArgs.front() != '[' || finalArgs.back() != ']') {
+        json arr = json::array();
+        arr.push_back(finalArgs);
+        return arr.dump();
+    }
+    return finalArgs;
+}
+
+
+void NM_Bridge::UnlinkModuleFromPEB(HMODULE hModule)
 {
     if (!hModule) return;
 
@@ -479,7 +461,7 @@ void UnlinkModuleFromPEB(HMODULE hModule)
     }
 }
 
-void HideCLR()
+void NM_Bridge::HideCLR()
 {
     const char* clr_modules[] = {
         "clr.dll", "mscoree.dll", "clrjit.dll",

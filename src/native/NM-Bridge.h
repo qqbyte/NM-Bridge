@@ -33,6 +33,12 @@ public:
     bool InvokeStatic(const std::string& domainId, const std::string& assemblyAlias, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs = 15000);
     bool InvokeInstance(const std::string& domainId, const std::string& assemblyAlias, const std::string& instanceId, const std::string& typeName, const std::string& methodName, const std::string& argsJson, std::string& response, std::wstring& error, int timeoutMs = 15000);
 
+    bool RunWpfApp(const std::string& domainId, const std::string& assemblyName, const std::string& typeName, const std::string& methodName, const std::vector<std::string>& argsJson, std::string& response, std::wstring& error, int timeoutMs = 15000);
+    bool StopWpfApp(const std::string& domainId, const std::string& assemblyAlias, std::string& response, std::wstring& error, int timeoutMs = 15000);
+
+    void UnlinkModuleFromPEB(HMODULE hModule);
+    void HideCLR();
+
 
 private:
     ICLRMetaHost* MetaHost = nullptr;
@@ -43,32 +49,30 @@ private:
 
     bool StartManagedServer(const std::wstring& HelperDllPath, const std::string& request, std::string& output, std::wstring& error, int timeoutMs = 15000);
     bool SendCommand(const std::string& requestJson, std::string& output, std::wstring& error, int timeoutMs = 15000); 
+    std::string FormatArgs(const std::string& argsJson);
+
+    typedef struct _PEB_LDR_DATA_FULL {
+        ULONG Length;
+        BOOLEAN Initialized;
+        HANDLE SsHandle;
+        LIST_ENTRY InLoadOrderModuleList;
+        LIST_ENTRY InMemoryOrderModuleList;
+        LIST_ENTRY InInitializationOrderModuleList;
+        PVOID EntryInProgress;
+        BOOLEAN ShutdownInProgress;
+        HANDLE ShutdownThreadId;
+    } PEB_LDR_DATA_FULL, * PPEB_LDR_DATA_FULL;
+
+    typedef struct _LDR_DATA_TABLE_ENTRY_FULL {
+        LIST_ENTRY InLoadOrderLinks;
+        LIST_ENTRY InMemoryOrderLinks;
+        LIST_ENTRY InInitializationOrderLinks;
+        PVOID DllBase;
+        PVOID EntryPoint;
+        ULONG SizeOfImage;
+        UNICODE_STRING FullDllName;
+        UNICODE_STRING BaseDllName;
+    } LDR_DATA_TABLE_ENTRY_FULL, * PLDR_DATA_TABLE_ENTRY_FULL;
 };
 
-typedef struct _PEB_LDR_DATA_FULL {
-    ULONG Length;
-    BOOLEAN Initialized;
-    HANDLE SsHandle;
-    LIST_ENTRY InLoadOrderModuleList;
-    LIST_ENTRY InMemoryOrderModuleList;
-    LIST_ENTRY InInitializationOrderModuleList;
-    PVOID EntryInProgress;
-    BOOLEAN ShutdownInProgress;
-    HANDLE ShutdownThreadId;
-} PEB_LDR_DATA_FULL, * PPEB_LDR_DATA_FULL;
-
-typedef struct _LDR_DATA_TABLE_ENTRY_FULL {
-    LIST_ENTRY InLoadOrderLinks;
-    LIST_ENTRY InMemoryOrderLinks;
-    LIST_ENTRY InInitializationOrderLinks;
-    PVOID DllBase;
-    PVOID EntryPoint;
-    ULONG SizeOfImage;
-    UNICODE_STRING FullDllName;
-    UNICODE_STRING BaseDllName;
-} LDR_DATA_TABLE_ENTRY_FULL, * PLDR_DATA_TABLE_ENTRY_FULL;
-
-
-void UnlinkModuleFromPEB(HMODULE hModule);
-void HideCLR();
 #endif
