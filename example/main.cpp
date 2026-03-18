@@ -1,9 +1,10 @@
 // main.cpp
 
-#include "NM-Bridge.h"
-#include "include/json.hpp"
+#include "../src/native/NM-Bridge.h"
+#include "../src/native/include/json.hpp"
 #include <iostream>
 #include <fstream>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -22,7 +23,6 @@ std::vector<BYTE> ReadFileBytes(const std::wstring& path) {
     if (file.read((char*)buffer.data(), size)) return buffer;
     return {};
 }
-
 
 
 int main() {
@@ -49,6 +49,7 @@ int main() {
 
 
 
+
     ///////////////////////////////////////////////////////////////////////////////
     // Optional: Hides CLR modules by unlinking them from the PEB module lists 
     // to avoid detection by standard process monitoring tools.
@@ -57,7 +58,7 @@ int main() {
     // Чтобы избежать обнаружения стандартными инструментами мониторинга процессов.
     ///////////////////////////////////////////////////////////////////////////////
 
-    HideCLR();
+    bridge.HideCLR();
 
 
 
@@ -195,12 +196,44 @@ int main() {
 
 
 
-
     ///////////////////////////////////////////////////////////////////////////////
-    // 8. Unload domain
+	// 8. Run WPF APP
+	// 
+	// 8. Запуск WPF APP
+	///////////////////////////////////////////////////////////////////////////////
+	
+	std::vector<std::string> WpfArgs;
+    if (bridge.RunWpfApp(domainId, "your asmAlias", "Main.Program", "main", WpfArgs, response, error)) {
+		std::cout << "[+] Wpf App running" << std::endl;
+	} 
+	else {
+		std::wcout << L"[-] Error RunWpfApp: " << error << std::endl;
+	}
+	
+	
+	
+	
+	///////////////////////////////////////////////////////////////////////////////
+	// 9. Stop WPF APP
+	//
+	// 9. Остановка WPF APP
+	////////////////////////////////////////////////////////////////////////////////
+	
+	if (bridge.StopWpfApp(domainId, "your asmAlias", response, error)) {
+		std::cout << "[+] Wpf App stopped" << std::endl;
+	} 
+	else {
+		std::wcout << "[-] Error StopWpfApp: " << error << std::endl;
+	}
+	
+	
+	
+	
+    ///////////////////////////////////////////////////////////////////////////////
+    // 10. Unload domain
     // Clears all memory and unloads loaded DLLs in this domain.
     // 
-    // 8. Выгрузка домена
+    // 10. Выгрузка домена
     // Очищает всю память и выгружает загруженные DLL - файлы в этом домене.
     ///////////////////////////////////////////////////////////////////////////////
 
@@ -212,9 +245,9 @@ int main() {
 
 
     ///////////////////////////////////////////////////////////////////////////////
-    // 9. Stopping the server
+    // 11. Stopping the server
     // 
-    // 9. Остановка сервера
+    // 11. Остановка сервера
     ///////////////////////////////////////////////////////////////////////////////
 
     bridge.Shutdown();
